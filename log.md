@@ -8,7 +8,7 @@
 
 Whereas, on Linux, it is the `total_size` field of a SimpleProcStat struct, which is something filled with its constructor, it's defined in osquery. Output from string parsing /proc/<pid>/status. That's it. In procfs it's `VmSize`.
 
-**Hour 3 Progress**: I wonder if the osquery processes table is actually measuring physical RAM usage or virtual memory size? Activity Monitor should be a cross-check. Also `ps -e -o pid,rss,vsz` or `ps -xm -o %mem,rss,comm -p $(pgrep MyAppName)` and `vm_stat` commands. Also `vmmap --summary "$pid"` But there is now Physical Memory, Wired Memory, and Compressed Memory??
+**Hour 3 Progress**: I wonder if the osquery processes table is actually measuring physical RAM usage or virtual memory size? Activity Monitor should be a cross-check. Also `ps -e -o pid,rss,vsz` or `ps -xm -o %mem,rss,comm -p $(pgrep Notes)` and `vm_stat` commands. Also `vmmap --summary "$pid"` But there is now Physical Memory, Wired Memory, and Compressed Memory??
 
     UGH, well one thing I just learned about memory is that Safari will lose the text I'm drafting in a long GitHub issue comment!
 
@@ -17,3 +17,71 @@ Whereas, on Linux, it is the `total_size` field of a SimpleProcStat struct, whic
     One of the fundamental problems with osquery is having to maintain something with so much code that is so close to the operating system that OS updates are constantly creating breaking changes. And there are multiple operating systems it supports.
 
 **Link to work:** I will be working here on  [osquery](https://github.com/michael-myers/osquery)
+
+### Day 1: June 29, 2024 (Saturday)
+
+**Hour 1 Progress**: Since updating my fork of osquery, my GitHub Actions have been failing and flooding my email. So I went to go turn off GitHub Actions in my account, but I couldn't find a toggle, so I deleted .github/workflows/ from my fork of the repo.
+
+    All right, let's determine what osquery calls "total virtual memory" versus the other tools.
+    Activity Monitor: Notes.app: Memory 377.2MB, Real Mem 219.0MB, Private Mem 161.0MB, Shared Mem 180.1MB, Purgeable Mem 19.2MB, VM Compressed 208.2MB. The compressed amount seems to mean the savings, not the resulting occupied memory size. In the lower panel, "Wired Memory" is that used by macOS itself (cannot be compressed) and "App Memory" is everything used by applications, which can be. "Real Memory" is also known as resident_size in task_info()"? and although it includes memory shared with other processes, I guess it is a rough guide? The Private Mem is the part of Real Mem that is _not_ shared. Purgeable Mem can be tossed if memory is tight, it is never written to swap.
+    ps: Notes.app: %MEM 1.3, RSS 224296, VSZ 35440844. RSS is the "real memory (resident set) size of the process, in 1024-byte units" -- so 219.0MB, which matches up with Activity Monitor. VSZ or VSIZE is the virtual size in Kbytes. What? that seems too big? %MEM is mostly not what I want, it is the percentage of memory usage.
+    vm_stat: this can't be run on a single process, so is not of use here.
+    vmmap --summary $pid: ah, now we get "Physical footprint" is 377.3MB, so this is what Activity Monitor calls "Memory". It also shows Physical Footprint (peak) is 639.6M. In the table it prints, VOLATILE SIZE total matches up with Activity Monitor's "Purgeable Mem." Its man page notes that "The size of the virtual memory region represents the virtual memory pages reserved, but not necessarily allocated.  For example, using the vm_allocate Mach system call reserves the pages, but physical memory won't be allocated for the page until the memory is actually touched.  A memory-mapped file may have a virtual memory page reserved, but the pages are not instantiated until a read or write happens.  Thus, this size may not correctly describe the application's true memory usage.""
+    Ok, so do we care about "Memory" (Physical Footprint) or "Real Memory"?? "Real Mem" is supposedly the RSS, which is the amount of physical memory that a process is actively using.
+    top -o mem: we have MEM, which is apparently "Memory" and is described as "Physical memory footprint of the process", "PURG" which is apparently "Purgeable Mem", "CMPRS" which is VM Compressed. If it shows VSIZE, that is "Total memory size" but I only see N/A in that column.
+    Mac OSX Developer Tool, "Big Top": ??
+    Does anyone actually see yellow or red memory pressure in Activity Monitor? With what? I am green with 16GB.
+    osquery returns these numbers:
+    osquery> select name,phys_footprint,total_size,wired_size,resident_size from processes where name is "Notes";
++-------+----------------+------------+------------+---------------+
+| name  | phys_footprint | total_size | wired_size | resident_size |
++-------+----------------+------------+------------+---------------+
+| Notes |                | 395317248  | 4096       | 226889728     |
++-------+----------------+------------+------------+---------------+
+  Which, is in bytes, so the `total_size` is once again 377MB.
+
+**Hour 2 Progress**: I'm thinking of making a venn diagram of this macOS memory types nonsense. "It is not possible to add up shared and private memory to arrive at the physical memory used by a process." What? Indeed, the "Real Private" and "Real Shared" columns add up to more than the "Real Memory" column in Activity Monitor.
+    Whoa, there's another CLI command: footprint.
+    footprint -p Notes: yea it is 377MB, the same as "Memory" in Activity Monitor.
+    Look at this gold nugget from the man page of footprint:
+    "Many operating systems have historically exposed memory metrics such as Virtual Size (VSIZE) and Resident Size (RSIZE/RPRVT/RSS/etc.). Metrics such as these, which are
+     useful in their own respect, are not great indicators of the amount of physical memory required by a process to run (and therefore the memory pressure that a process
+     applies to the system). For instance, Virtual Size includes allocations that may not be backed by physical memory, and Resident Size includes clean and volatile
+     purgeable memory that can be reclaimed by the kernel (as described earlier).
+     On the other hand, analyzing the dirty memory reported by the underlying VM objects mapped into a process (the approach taken by --vmObjectDirty), while more accurate,
+     is expensive and cannot be done in real-time for systems that need to frequently know the memory footprint of a process.
+
+     Apple platforms instead keep track of the 'physical footprint' by using a per-process ledger in the kernel that is kept up-to-date by the pmap and other subsystems.
+     This ledger is cheap to query, suitably accurate, and provides additional features such as tracking peak memory and the ability to charge one process for memory that is
+     no longer mapped into it or that may have been allocated by another process. In cases where footprint is unable to analyze a portion of 'physical footprint' that is not
+     mapped into a process, this memory will be listed as 'Owned physical footprint (unmapped)'. If this memory is mapped into another userspace process then the --unmapped
+     argument can be used to search all processes for a mapping of the same VM object, which if found will provide a better description and what process(s) have mapped the
+     memory. This also happens by default when targeting all processes via --all.  Any memory still listed as "(unmapped)" after using --unmapped is likely not mapped into
+     any userspace process and instead only referenced by the kernel or drivers.
+     The exact definition of this 'physical footprint' ledger is complicated and subject to change, but suffice it to say that the default mode of footprint aims to present
+     an accurate memory breakdown that matches the value reported by the ledger. Most other diagnostic tools, such as the 'MEM' column in top(1), the 'Memory' column in
+     Activity Monitor.app, and the Memory Debug Gauge in Xcode.app, query this ledger to populate their metrics.
+
+     Physical footprint can be potentially be split into multiple subcategories, such as network related memory, graphics, etc. When a memory allocation (either directly
+     mapped into a process, or owned but unmapped) has such a classification, footprint will append it to the category name such as 'IOKit (graphics)' or 'Owned physical
+     footprint (unmapped) (media)'."
+     
+     Ended this hour with a comment on how we can resolve issue 7750 on osquery.
+
+**Hour 3 Progress**: Just reading a bunch about macOS memory metrics.
+
+**Thoughts:** So, Activity Monitor reports "physical footprint" which is not a measure of any real number of bytes of occpuied physical RAM, but calls it "Memory". Then it reports "Real Memory" which ostensibly is the opposite of "Virtual Memory" which it does not report at all, and is not even a column. Then it reports two kinds of real memory, shared and private, which do not add up to equal the Real Memory column. And it reports "Compressed" which is not the size after compression, but rather the delta or savings of the compression???? You have to be fucking kidding me. But today has been a bit of a lesson on memory metrics I guess.
+
+    Normally I trust the macOS technical blog eclecticlight.co, but I don't think he really understands virtual memory or memory management as well as he thinks he does. For a couple of years he's been accusing Finder of having a memory leak, when all it might be doing is not freeing allocations when it doesn't have to, when there's so much RAM that holding onto them might increase responsiveness compared to having to flush and free caches just to make a number go down in Activity Monitor. You want RAM to be used for caching disk! Did he even look at whether the allocations were "purgeable memory"? He admits "I have absolutely no idea what Apple means by Real Memory" [1](https://eclecticlight.co/2022/01/19/memory-lane-grokking-memory-problems-in-activity-monitor/) [2](https://eclecticlight.co/2022/08/10/getting-more-from-activity-monitor-memory/) [3 here he fails to correctly explain the memory reporting columns, in the comments](https://eclecticlight.co/2022/08/13/activity-monitor-meanings-and-misleadings/) [4 omg he is still talking about this Finder results-caching behavior](https://eclecticlight.co/2023/06/06/what-to-do-when-an-app-uses-too-much-memory/)
+
+     People do like to complain about a single Safari tab showing 300MB or 1GB of memory, and that's justifiable to complain about, but also how much of it basically disappears due to virtual memory compression when you're not using that tab? How much of it is Shared Memory because it's using a bunch of libraries that all of the other tabs are also using?
+     
+     It would really be nice if there was a Memory resource viewer that sorted processes hierarchically but also totaled up the subprocesses of a process. As-is, you can't tell what the sum total of, e.g., your browser is on memory usage.
+
+**Resources:**
+ 
+ * https://ladedu.com/how-to-interpret-memory-in-mac-activity-monitor/
+ * `man leaks` which explains how to search a process's memory for unreferenced malloc buffers, before assuming that all memory usage increase is a leak, like Howard does.
+ * Small web blogs are always the best for facts you can't find anywhere else! https://www.mikeash.com/pyblog/friday-qa-2009-06-19-mac-os-x-process-memory-statistics.html
+
+**Link to work:** [osquery issue 7750](https://github.com/osquery/osquery/issues/7750)
