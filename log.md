@@ -18,7 +18,7 @@ Whereas, on Linux, it is the `total_size` field of a SimpleProcStat struct, whic
 
 **Link to work:** I will be working here on  [osquery](https://github.com/michael-myers/osquery)
 
-### Day 1: June 29, 2024 (Saturday)
+### Day 2: June 29, 2024 (Saturday)
 
 **Hour 1 Progress**: Since updating my fork of osquery, my GitHub Actions have been failing and flooding my email. So I went to go turn off GitHub Actions in my account, but I couldn't find a toggle, so I deleted .github/workflows/ from my fork of the repo.
 
@@ -85,3 +85,65 @@ Whereas, on Linux, it is the `total_size` field of a SimpleProcStat struct, whic
  * Small web blogs are always the best for facts you can't find anywhere else! https://www.mikeash.com/pyblog/friday-qa-2009-06-19-mac-os-x-process-memory-statistics.html
 
 **Link to work:** [osquery issue 7750](https://github.com/osquery/osquery/issues/7750)
+
+### Day 3: June 30, 2024 (Sunday)
+
+What if I just moved 'status' to the Linux-only extended schema, then?
+https://github.com/osquery/osquery/issues/8073
+It's so simple, but nobody has replied. So, what's the deal?
+
+Is this another TCC problem that requires shelling out from an extension?
+`osquery> select * from device_partitions where device is "/dev/disk0";` returns nothing. But so does "/dev/disk1" which is "synthesized" and "/dev/disk2" which is "external" ... so is it not just 'internal' disks but all? Or am I supplying the wrong constraint? No it appears it just doesn't work.
+https://github.com/osquery/osquery/issues/7777
+Also, this is one of three tables (along with device_table, and device_hash) that uses The Sleuth Kit (TSK) dependency to get results. Is this dependency worth maintaining? These don't seem like results you'd need a dependency to retrieve?
+
+What if the schema comments were more descriptive? Like for processes, where "total_size" is a differently derived value on macOS versus Linux.
+
+What if the schema didn't have missing comments for columns? Like in device_partitions.
+https://osquery.io/schema/5.12.1/#device_partitions
+
+This seems like it could be answered and easily closed?
+https://github.com/osquery/osquery/issues/7167
+
+This seems like it should just be closed as fixed-as-it-will-get?
+https://github.com/osquery/osquery/issues/7220
+
+This should be closed with a schema comment that this is only a stat for ethernet interfaces that are connected:
+https://github.com/osquery/osquery/issues/6595
+
+"Good first issue" lol it has been open since 2019. Just need to convert some numbers better, I bet we can do that. "we are missing the flt type" says Stefano, and the fix should be in smc_keys which should just produce the string representation that power_sensors expects. https://github.com/osquery/osquery/blob/4f78848794cd2df1532b9c8d7e3fe4b17dde3e2a/osquery/tables/system/darwin/smc_keys.cpp#L381-L404
+https://github.com/osquery/osquery/issues/5896
+
+**Thoughts:** a macOS daemon requires so many entitlements now that it is becoming untenable to use the APIs. More and more things require shelling out to a CLI command from an Apple executable that actually has the entitlement.
+
+### Day 4: July 1, 2024 (Monday)
+
+**Hour 1 Progress**:
+Update the table spec for processes.
+Did the alias point to something in the extended schema that was removed? Or why does the alias not work??
+Also update docs/wiki/introduction/sql.md
+Also update specs/posix/docker_container_processes.table
+A rebuild, with only these minor changes, took less time than the initial build: 6m45s.
+Make a git branch with just these changes, push it to my fork, open a pull request to close issue 7750
+
+**Hour 2 Progress**:
+All right if I am going to add table spec column comments for device_paritions, I need to read osquery/tables/sleuthkit/sleuthkit.cpp.
+"Label" is the partition description, pretty straightforward.
+"Flags" is interesting since it's exposing an internal enum of The Sleuthkit, but okay.
+Etc.
+
+Oh this would be easy to fix, I'll go ahead and do that (documentation)
+https://github.com/osquery/osquery/issues/7392
+
+**Thoughts:** I see there's a lot of resentment that https://github.com/osquery/osquery/issues/7627 the temperature sensors table still doesn't work on Apple Silicon macs (which is basically all of them now). I did some of that initial investigation in 2022, but now I don't have Apple Silicon to work on.
+
+    I see that I could squash some compiler warnings for security: "warning: 'sprintf' is deprecated: This function is provided for compatibility reasons only.  Due to security concerns inherent in the design of sprintf(3), it is highly recommended that you use snprintf(3) instead"
+    
+    Fixing more of the schema on the website should be easy: https://github.com/osquery/osquery/issues/7198
+
+    Is this the spirit of 100 Days of Code? Analyzing issues and updating metadata like docs and schemas? 
+
+**Links to work:** 
+* https://github.com/osquery/osquery/pull/8363
+* https://github.com/osquery/osquery/pull/8364
+* https://github.com/osquery/osquery/pull/8365
